@@ -1,0 +1,59 @@
+name: Build iOS Menu UI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Unzip Project Files
+      run: |
+        unzip ImGui.zip -d .
+
+    - name: Compiler Strictness Fix
+      run: |
+        # Append target configurations safely to the clean Makefile
+        if [ -f Makefile ]; then
+          echo "ADDITIONAL_CFLAGS = -I. -I./ImGui -I./Includes -Wno-error -Wno-everything" >> Makefile
+          echo "ADDITIONAL_OBJCFLAGS = -I. -I./ImGui -I./Includes -Wno-error -Wno-everything" >> Makefile
+          echo "ADDITIONAL_CCFLAGS = -I. -I./ImGui -I./Includes -Wno-error -Wno-everything" >> Makefile
+        fi
+        
+        # Bypass template errors in Unity.h
+        if [ -f Includes/Unity/Unity.h ]; then
+          sed -i '' 's/->template toCPPList/->toCPPList/g' Includes/Unity/Unity.h
+        fi
+
+        # Fix module leakage in Dobby headers
+        find . -name "dobby_defines.h" -type f | while read -r file; do
+          sed -i '' 's/#include <stdint.h>//g' "$file"
+          sed -i '' '1s/^/#include <stdint.h>\n/' "$file"
+        done
+
+    - name: Set up Manual Theos Environment
+      run: |
+        brew install ldid xz
+        git clone --recursive https://github.com/theos/theos.git ~/theos
+        echo "THEOS=~/theos" >> $GITHUB_ENV
+
+    - name: Link Built-in iOS SDK
+      run: |
+        mkdir -p ~/theos/sdks
+        SYS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+        ln -s "$SYS_SDK" ~/theos/sdks/iPhoneOS.sdk
+
+    - name: Compile Project
+      run: |
+        export THEOS=~/theos
+        make package FINALPACKAGE=1 GO_EASY=1
+
+    - name: Upload .dylib Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: iOS-Menu-Dylib
+        path: .theos/obj/*.dylib
